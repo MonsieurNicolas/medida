@@ -142,19 +142,25 @@ double Snapshot::Impl::getValue(double quantile) const {
     return 0.0;
   }
 
-  auto pos = quantile * (values_.size() + 1);
+  double h = quantile * (values_.size() + 1) - 1.0;
 
-  if (pos < 1) {
-    return values_.front();
+  double floor_h = std::floor(h);
+  if (floor_h < 0)
+  {
+      return values_.front();
   }
 
-  if (pos >= values_.size()) {
-    return values_.back();
+  size_t hlo = static_cast<size_t>(floor_h);
+  size_t hhi = hlo + 1;
+
+  if (hhi >= values_.size())
+  {
+      return values_.back();
   }
 
-  double lower = values_[pos - 1];
-  double upper = values_[pos];
-  return lower + (pos - std::floor(pos)) * (upper - lower);
+  double lower = values_.at(hlo);
+  double upper = values_.at(hhi);
+  return lower + ((h - floor_h) * (upper - lower));
 }
 
 
