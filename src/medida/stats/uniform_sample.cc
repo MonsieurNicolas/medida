@@ -111,7 +111,13 @@ Snapshot UniformSample::Impl::MakeSnapshot() const {
   std::uint64_t count = count_.load();
   std::lock_guard<std::mutex> lock {mutex_};
   auto begin = std::begin(values_);
-  return Snapshot {{begin, begin + std::min(count, size)}};
+  auto end = begin + std::min(count, size);
+  std::vector<WeightedValue> res;
+  res.reserve(values_.size());
+  std::transform(values_.begin(), end, std::back_inserter(res), [](std::int64_t v) {
+                     return WeightedValue{double(v), 1.0};
+                 });
+  return Snapshot {res};
 }
 
 

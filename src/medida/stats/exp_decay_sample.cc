@@ -42,11 +42,6 @@ class ExpDecaySample::Impl
     Clock::time_point nextScaleTime_;
 
     std::atomic<std::uint64_t> count_;
-    struct WeightedValue
-    {
-        std::int64_t value;
-        double weight;
-    };
     std::map<double, WeightedValue> values_;
     std::mutex mutex_;
     mutable std::mt19937 rng_;
@@ -157,7 +152,7 @@ ExpDecaySample::Impl::Update(std::int64_t value, Clock::time_point timestamp)
         alpha_ * (double(dur.count()) + BLEED_TIME_SECONDS * dist_(rng_)));
     auto count = ++count_;
 
-    WeightedValue wv = {value, itemWeight};
+    WeightedValue wv = {double(value), itemWeight};
     if (count <= reservoirSize_)
     {
         values_[priority] = wv;
@@ -212,13 +207,10 @@ ExpDecaySample::Impl::Rescale(const Clock::time_point& when)
 Snapshot
 ExpDecaySample::Impl::MakeSnapshot() const
 {
-    std::vector<double> vals;
+    std::vector<WeightedValue> vals;
 
     if (values_.empty())
         return {vals};
-
-    std::vector<WeightedValue> wvals;
-    wvals.reserve(values_.size());
 
     // only pick data within the window
     auto const highPriority = (--values_.end())->first;
@@ -229,74 +221,10 @@ ExpDecaySample::Impl::MakeSnapshot() const
 
     auto lowIt = values_.lower_bound(lowPriority);
 
-    double totWeight = 0;
-    for (auto it = lowIt; it != values_.end(); it++)
-    {
-        wvals.emplace_back(it->second);
-        totWeight += it->second.weight;
-    }
-
-    if (wvals.empty() || totWeight == 0.0)
-    {
-        return {vals};
-    }
-
-    std::sort(wvals.begin(), wvals.end(),
-              [](WeightedValue const& l, WeightedValue const& r) {
-                  return l.value < r.value;
-              });
-
-    // derive percentiles
-    // Snapshot could be changed to be weighted instead as to avoid this
-    const int nbSamples = 101;
-    auto const& first = *(wvals.begin());
-
-    if (totWeight != 0)
-    {
-        vals.resize(nbSamples);
-        int ins = 0;
-        double percentile = first.weight;
-
-        // fills using linear interpolation between values
-        auto fillSome = [&vals, &ins](int count, double prevValue,
-                                      double value) {
-            for (int i = 1; i <= count; i++)
-            {
-                auto v = prevValue + (value - prevValue) * i / count;
-                vals[ins++] = v;
-            }
-        };
-
-        int lastVindex = percentile * nbSamples / totWeight;
-        double prevValue = first.value;
-        if (lastVindex > 0)
-        {
-            fillSome(lastVindex, prevValue, prevValue);
-        }
-
-        // process rest of the values
-        for (auto it = ++wvals.begin(); it != wvals.end(); it++)
-        {
-            percentile += it->weight;
-            int index = percentile * nbSamples / totWeight;
-            if (index > lastVindex)
-            {
-                fillSome(index - lastVindex, prevValue, it->value);
-                lastVindex = index;
-                prevValue = it->value;
-            }
-        }
-        // rounding error may have caused us to miss the last one
-        if (ins != nbSamples)
-        {
-            fillSome(nbSamples - ins, prevValue, wvals.back().value);
-        }
-    }
-    else
-    {
-        vals.emplace_back(first.value);
-    }
-    return {vals};
+    vals.reserve(values_.size());
+    
+    std::transform(lowIt, values_.end(), std::back_inserter(vals), [](std::pair<double, WeightedValue> const& v) { return v.second;});
+    return vals;
 }
 
 } // namespace stats

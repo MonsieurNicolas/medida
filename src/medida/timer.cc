@@ -253,10 +253,10 @@ void Timer::Impl::Update(std::chrono::nanoseconds duration) {
 
 stats::Snapshot Timer::Impl::GetSnapshot() const {
   auto values = histogram_.GetSnapshot().getValues();
-  std::vector<double> converted;
+  std::vector<stats::WeightedValue> converted;
   converted.reserve(values.size());
   for (auto& v : values) {
-    converted.push_back(v / (double)duration_unit_nanos_);
+      converted.push_back({v / (double)duration_unit_nanos_, 1.0});
   }
   return {converted};
 }
