@@ -142,7 +142,8 @@ double Snapshot::Impl::getValue(double quantile) const {
     return 0.0;
   }
 
-  double h = quantile * (values_.size() + 1) - 1.0;
+  // variant, C=1 (used in NumPy, and Excel PERCENTILE.INC)
+  double h = quantile * (values_.size() - 1);
 
   double floor_h = std::floor(h);
   if (floor_h < 0)
