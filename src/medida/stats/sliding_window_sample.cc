@@ -121,6 +121,8 @@ void
 SlidingWindowSample::Impl::Update(std::int64_t value,
                                   Clock::time_point timestamp)
 {
+    std::lock_guard<std::mutex> lock{mutex_};
+
     if (!values_.empty())
     {
         // If we're in a new timeslice, reset the admission mask.
@@ -142,16 +144,25 @@ SlidingWindowSample::Impl::Update(std::int64_t value,
     // events because they're overwritten before they get observed. To
     // compensate for this, the sliding window maintains an "admission mask"
     // that's reset on each timeslice, and used for exponentially-more-forceful
-    // stochastic rate limiting of each extra addition within a timeslice.
-    std::lock_guard<std::mutex> lock{mutex_};
+    // stochastic rate limiting of replacement of a sample within the timeslice.
+
     if ((dist_(rng_) & admissionMask_) == 0)
     {
-        values_.emplace_back(value, timestamp);
         admissionMask_ <<= 1;
         admissionMask_ |= 1;
-        if (values_.size() > windowSize_)
+        // Check if we've already inserted an item for the same timeSlice.
+        if (!values_.empty() && timestamp <= values_.back().second + timeSlice_)
         {
-            values_.pop_front();
+            // Keep old timestamp to anchor timeSlice; but replace value.
+            values_.back().first = value;
+        }
+        else
+        {
+            values_.emplace_back(value, timestamp);
+            if (values_.size() > windowSize_)
+            {
+                values_.pop_front();
+            }
         }
     }
 }
