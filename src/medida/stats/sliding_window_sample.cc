@@ -32,7 +32,8 @@ class SlidingWindowSample::Impl
     std::mutex mutex_;
     const std::size_t windowSize_;
     const std::chrono::seconds windowTime_;
-    std::size_t dataPerTimeSlice_;
+    const std::chrono::microseconds timeSlice_;
+    std::size_t admissionMask_;
     std::default_random_engine rng_;
     std::uniform_int_distribution<size_t> dist_;
     std::deque<std::pair<double, Clock::time_point>> values_;
@@ -84,7 +85,8 @@ SlidingWindowSample::Impl::Impl(std::size_t windowSize,
                                 std::chrono::seconds windowTime)
     : windowSize_(windowSize)
     , windowTime_(windowTime)
-    , dataPerTimeSlice_(1)
+    , timeSlice_(std::chrono::duration_cast<std::chrono::microseconds>(windowTime)/windowSize)
+    , admissionMask_(0)
     , dist_(0, std::numeric_limits<size_t>::max())
 {
     Clear();
@@ -99,7 +101,7 @@ SlidingWindowSample::Impl::Clear()
 {
     std::lock_guard<std::mutex> lock{mutex_};
     values_.clear();
-    dataPerTimeSlice_ = 1;
+    admissionMask_ = 0;
 }
 
 std::uint64_t
@@ -119,29 +121,38 @@ void
 SlidingWindowSample::Impl::Update(std::int64_t value,
                                   Clock::time_point timestamp)
 {
+    if (!values_.empty())
+    {
+        // If we're in a new timeslice, reset the admission mask.
+        if (timestamp > values_.back().second + timeSlice_)
+        {
+            admissionMask_ = 0;
+        }
+
+        // If there's old data, trim it.
+        Clock::time_point expiryTime = timestamp - windowTime_;
+        while (!values_.empty() && values_.front().second < expiryTime)
+        {
+            values_.pop_front();
+        }
+    }
+
     // When you add samples to the sliding window _slowly_ nothing goes wrong;
     // when you add them too _quickly_ there's the possibility of losing rare
     // events because they're overwritten before they get observed. To
-    // compensate for this, the sliding window maintains a counter of data
-    // expired "by size" inbetween any expiry "by time", and uses this to
-    // perform stochastic rate limiting of new additions.
+    // compensate for this, the sliding window maintains an "admission mask"
+    // that's reset on each timeslice, and used for exponentially-more-forceful
+    // stochastic rate limiting of each extra addition within a timeslice.
     std::lock_guard<std::mutex> lock{mutex_};
-    if ((dist_(rng_) % dataPerTimeSlice_) == 0)
+    if ((dist_(rng_) & admissionMask_) == 0)
     {
         values_.emplace_back(value, timestamp);
-    }
-
-    Clock::time_point expiryTime = timestamp - windowTime_;
-    while (!values_.empty() && values_.front().second < expiryTime)
-    {
-        dataPerTimeSlice_ = 1;
-        values_.pop_front();
-    }
-
-    while (values_.size() > windowSize_)
-    {
-        dataPerTimeSlice_++;
-        values_.pop_front();
+        admissionMask_ <<= 1;
+        admissionMask_ |= 1;
+        if (values_.size() > windowSize_)
+        {
+            values_.pop_front();
+        }
     }
 }
 
@@ -150,6 +161,7 @@ SlidingWindowSample::Impl::MakeSnapshot()
 {
     std::lock_guard<std::mutex> lock{mutex_};
     std::vector<double> vals;
+    vals.reserve(values_.size());
     for (auto v : values_)
     {
         vals.emplace_back(v.first);
