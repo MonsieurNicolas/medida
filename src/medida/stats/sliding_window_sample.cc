@@ -33,8 +33,7 @@ class SlidingWindowSample::Impl
     const std::size_t windowSize_;
     const std::chrono::seconds windowTime_;
     const std::chrono::microseconds timeSlice_;
-    std::uint32_t sliceRandomizer_;
-    std::uint32_t lastElementHash_;
+    std::uint32_t sliceCount_;
     std::default_random_engine rng_;
     std::uniform_int_distribution<std::uint32_t> dist_;
     std::deque<std::pair<double, Clock::time_point>> values_;
@@ -89,8 +88,7 @@ SlidingWindowSample::Impl::Impl(std::size_t windowSize,
     , timeSlice_(
           std::chrono::duration_cast<std::chrono::microseconds>(windowTime) /
           windowSize)
-    , sliceRandomizer_(0)
-    , lastElementHash_(0)
+    , sliceCount_(0)
     , rng_(std::random_device()())
     , dist_(0, std::numeric_limits<std::uint32_t>::max())
 {
@@ -115,23 +113,6 @@ SlidingWindowSample::Impl::size()
     return values_.size();
 }
 
-// NB: hash function used here should have the "avalanche" property
-static uint32_t
-jenkins_one_at_a_time_hash(const uint8_t* key, size_t length, uint32_t hash)
-{
-    size_t i = 0;
-    while (i != length)
-    {
-        hash += key[i++];
-        hash += hash << 10;
-        hash ^= hash >> 6;
-    }
-    hash += hash << 3;
-    hash ^= hash >> 11;
-    hash += hash << 15;
-    return hash;
-}
-
 void
 SlidingWindowSample::Impl::Update(std::int64_t value)
 {
@@ -146,11 +127,10 @@ SlidingWindowSample::Impl::Update(std::int64_t value,
 
     if (!values_.empty())
     {
-        // If we're in a new timeslice, change the random order.
+        // If we're in a new timeslice, reset count
         if (timestamp > values_.back().second + timeSlice_)
         {
-            sliceRandomizer_ = dist_(rng_);
-            lastElementHash_ = 0;
+            sliceCount_ = 0;
         }
 
         // If there's old data, trim it.
@@ -164,28 +144,24 @@ SlidingWindowSample::Impl::Update(std::int64_t value,
     // When you add samples to the sliding window _slowly_ nothing goes wrong;
     // when you add them too _quickly_ there's the possibility of losing rare
     // events because they're overwritten before they get observed. To
-    // compensate for this, we pick a "sliceRandomizer_" for each timeslice,
-    // and used use it to generate a pseudo-random order for the samples.
-    // We then pick the biggest value in this random order which
-    // corresponds to a random element from that timeslice.
-    uint32_t h = jenkins_one_at_a_time_hash(reinterpret_cast<uint8_t*>(&value),
-                                            sizeof(value), sliceRandomizer_);
+    // compensate for this, XXXXX
+    // XXXXXXXXXX
 
     // Check if we've already inserted an item for the same timeSlice.
     if (!values_.empty() && timestamp <= values_.back().second + timeSlice_)
     {
-        // now, check if it's a greater value
-        if (h > lastElementHash_)
+        sliceCount_++;
+        auto r = size_t(dist_(rng_))*sliceCount_;
+        if (r <= std::numeric_limits<std::uint32_t>::max())
         {
             // Keep old timestamp to anchor timeSlice; but replace value.
             values_.back().first = value;
-            lastElementHash_ = h;
         }
     }
     else
     {
         values_.emplace_back(value, timestamp);
-        lastElementHash_ = h;
+        sliceCount_ = 1;
         if (values_.size() > windowSize_)
         {
             values_.pop_front();
